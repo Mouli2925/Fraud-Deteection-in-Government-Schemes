@@ -1,0 +1,170 @@
+"""
+=============================================================
+  FRAUD DASHBOARD – Summary Report Generator
+  Generates a comprehensive visual PDF-style summary
+=============================================================
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.patches import FancyBboxPatch
+import sys
+sys.path.insert(0, '.')
+from fraud_detection_main import generate_dataset, feature_engineering, train_and_evaluate
+
+def create_dashboard():
+    print("[Dashboard] Generating fraud analytics dashboard...")
+
+    df = generate_dataset(10000)
+    df, features = feature_engineering(df)
+
+    # Quick model run for numbers
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import accuracy_score, roc_auc_score
+    X = df[features]; y = df['is_fraud']
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
+    rf = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
+    rf.fit(X_train, y_train)
+    y_pred  = rf.predict(X_test)
+    y_proba = rf.predict_proba(X_test)[:, 1]
+    acc = accuracy_score(y_test, y_pred)
+    auc = roc_auc_score(y_test, y_proba)
+
+    fraud_df  = df[df['is_fraud']==1]
+    legit_df  = df[df['is_fraud']==0]
+    total_loss = fraud_df['scheme_amount'].sum()
+
+    fig = plt.figure(figsize=(20, 14), facecolor='#0d1117')
+    gs  = gridspec.GridSpec(3, 4, figure=fig, hspace=0.45, wspace=0.35)
+
+    TITLE_CLR  = '#e6edf3'
+    ACCENT     = '#58a6ff'
+    FRAUD_CLR  = '#ff6b6b'
+    OK_CLR     = '#3fb950'
+    WARN_CLR   = '#d29922'
+    PANEL_CLR  = '#161b22'
+    GRID_CLR   = '#21262d'
+
+    def panel_bg(ax, color=PANEL_CLR):
+        ax.set_facecolor(color)
+        for sp in ax.spines.values():
+            sp.set_edgecolor(GRID_CLR)
+
+    # ── Title ──────────────────────────────────────────────
+    ax_title = fig.add_subplot(gs[0, :])
+    ax_title.set_facecolor('#0d1117')
+    ax_title.axis('off')
+    ax_title.text(0.5, 0.70, '🔍 FRAUD DETECTION IN GOVERNMENT SCHEMES',
+                  ha='center', va='center', fontsize=22, fontweight='bold',
+                  color=TITLE_CLR, transform=ax_title.transAxes)
+    ax_title.text(0.5, 0.25, 'Big Data Analytics Dashboard  |  Random Forest + Isolation Forest  |  10,000 Beneficiary Records',
+                  ha='center', va='center', fontsize=11, color='#8b949e',
+                  transform=ax_title.transAxes)
+
+    # ── KPI Cards ──────────────────────────────────────────
+    kpis = [
+        ('Total Records',   f'{len(df):,}',           '#58a6ff'),
+        ('Fraud Cases',     f'{df["is_fraud"].sum():,}', '#ff6b6b'),
+        ('Fraud Rate',      f'{df["is_fraud"].mean()*100:.1f}%', '#d29922'),
+        ('RF Accuracy',     f'{acc*100:.1f}%',         '#3fb950'),
+        ('ROC-AUC Score',   f'{auc:.4f}',              '#a371f7'),
+        ('Funds at Risk',   f'₹{total_loss/1e6:.1f}M', '#ff7b72'),
+    ]
+    for i, (label, val, color) in enumerate(kpis):
+        col = i % 4
+        row_offset = 0 if i < 4 else 1
+        # We'll place them in the title row differently
+        # Use text boxes instead
+        x = 0.04 + (i % 3) * 0.33
+        y = 0.0
+        ax_title.text(x + 0.08, -0.3, val, ha='center', fontsize=18, fontweight='bold',
+                      color=color, transform=ax_title.transAxes)
+        ax_title.text(x + 0.08, -0.62, label, ha='center', fontsize=9, color='#8b949e',
+                      transform=ax_title.transAxes)
+
+    # ── Class Distribution Pie ─────────────────────────────
+    ax1 = fig.add_subplot(gs[1, 0])
+    panel_bg(ax1)
+    sizes  = [legit_df.shape[0], fraud_df.shape[0]]
+    colors = [OK_CLR, FRAUD_CLR]
+    wedges, texts, autotexts = ax1.pie(sizes, labels=['Legitimate','Fraud'],
+                                        colors=colors, autopct='%1.1f%%',
+                                        startangle=140, textprops={'color': TITLE_CLR})
+    for at in autotexts: at.set_fontsize(11); at.set_fontweight('bold')
+    ax1.set_title('Class Distribution', color=TITLE_CLR, fontsize=11, pad=8)
+
+    # ── Scheme Fraud Rate ──────────────────────────────────
+    ax2 = fig.add_subplot(gs[1, 1])
+    panel_bg(ax2)
+    scheme_fraud = df.groupby('scheme_type')['is_fraud'].mean().sort_values(ascending=True) * 100
+    bars = ax2.barh(scheme_fraud.index, scheme_fraud.values,
+                    color=[FRAUD_CLR if v > 12 else WARN_CLR for v in scheme_fraud.values])
+    ax2.set_xlabel('Fraud Rate (%)', color='#8b949e', fontsize=9)
+    ax2.set_title('Fraud Rate by Scheme', color=TITLE_CLR, fontsize=11)
+    ax2.tick_params(colors='#8b949e')
+    ax2.xaxis.label.set_color('#8b949e')
+    for bar, val in zip(bars, scheme_fraud.values):
+        ax2.text(val + 0.2, bar.get_y() + bar.get_height()/2,
+                 f'{val:.1f}%', va='center', fontsize=8, color=TITLE_CLR)
+
+    # ── Claims per Year Histogram ──────────────────────────
+    ax3 = fig.add_subplot(gs[1, 2])
+    panel_bg(ax3)
+    ax3.hist(legit_df['claims_per_year'], bins=18, alpha=0.7, color=OK_CLR,
+             label='Legitimate', density=True)
+    ax3.hist(fraud_df['claims_per_year'], bins=18, alpha=0.7, color=FRAUD_CLR,
+             label='Fraud', density=True)
+    ax3.set_xlabel('Claims per Year', color='#8b949e', fontsize=9)
+    ax3.set_ylabel('Density', color='#8b949e', fontsize=9)
+    ax3.set_title('Claims Distribution', color=TITLE_CLR, fontsize=11)
+    ax3.tick_params(colors='#8b949e')
+    ax3.legend(fontsize=8, facecolor=PANEL_CLR, labelcolor=TITLE_CLR)
+
+    # ── State-wise Fraud ───────────────────────────────────
+    ax4 = fig.add_subplot(gs[1, 3])
+    panel_bg(ax4)
+    state_data = df.groupby('state')['is_fraud'].mean().sort_values(ascending=True) * 100
+    c_map = [FRAUD_CLR if v > 12 else ACCENT for v in state_data.values]
+    ax4.barh(state_data.index, state_data.values, color=c_map)
+    ax4.set_xlabel('Fraud Rate (%)', color='#8b949e', fontsize=9)
+    ax4.set_title('Fraud Rate by State', color=TITLE_CLR, fontsize=11)
+    ax4.tick_params(colors='#8b949e')
+
+    # ── Feature Importance ─────────────────────────────────
+    ax5 = fig.add_subplot(gs[2, 0:2])
+    panel_bg(ax5)
+    importances = rf.feature_importances_
+    feat_df = pd.DataFrame({'Feature': features, 'Importance': importances})
+    feat_df = feat_df.sort_values('Importance').tail(10)
+    bar_colors = [FRAUD_CLR if imp > 0.08 else ACCENT for imp in feat_df['Importance']]
+    ax5.barh(feat_df['Feature'], feat_df['Importance'], color=bar_colors)
+    ax5.set_xlabel('Importance Score', color='#8b949e', fontsize=9)
+    ax5.set_title('Top Feature Importances – Random Forest', color=TITLE_CLR, fontsize=11)
+    ax5.tick_params(colors='#8b949e')
+
+    # ── Income vs Scheme Amount Scatter ───────────────────
+    ax6 = fig.add_subplot(gs[2, 2:4])
+    panel_bg(ax6)
+    sample = df.sample(1500, random_state=1)
+    ax6.scatter(sample[sample['is_fraud']==0]['annual_income'],
+                sample[sample['is_fraud']==0]['scheme_amount'],
+                alpha=0.4, s=10, color=OK_CLR, label='Legitimate')
+    ax6.scatter(sample[sample['is_fraud']==1]['annual_income'],
+                sample[sample['is_fraud']==1]['scheme_amount'],
+                alpha=0.6, s=18, color=FRAUD_CLR, label='Fraud', marker='x')
+    ax6.set_xlabel('Annual Income (₹)', color='#8b949e', fontsize=9)
+    ax6.set_ylabel('Scheme Amount (₹)', color='#8b949e', fontsize=9)
+    ax6.set_title('Income vs Scheme Amount (Fraud Highlighted)', color=TITLE_CLR, fontsize=11)
+    ax6.tick_params(colors='#8b949e')
+    ax6.legend(fontsize=9, facecolor=PANEL_CLR, labelcolor=TITLE_CLR)
+
+    plt.savefig('reports/fraud_dashboard.png', dpi=160, bbox_inches='tight',
+                facecolor='#0d1117')
+    plt.close()
+    print("[✓] Dashboard saved → reports/fraud_dashboard.png")
+
+if __name__ == '__main__':
+    create_dashboard()

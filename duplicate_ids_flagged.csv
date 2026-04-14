@@ -1,0 +1,210 @@
+"""
+=============================================================
+  BIG DATA PROCESSING MODULE
+  Simulates PySpark-style distributed processing using pandas
+  (Use this script when running on a Spark cluster / Databricks)
+=============================================================
+"""
+
+import pandas as pd
+import numpy as np
+from collections import Counter
+
+# ── Simulated Spark-style operations ──────────────────────
+# In a real Big Data environment, replace 'pd.DataFrame' with
+# pyspark.sql.DataFrame and adapt the syntax accordingly.
+
+class BigDataPipeline:
+    """
+    Simulates distributed big data processing for
+    fraud detection in government scheme data.
+    Concepts demonstrated:
+      - Partitioning & aggregation (MapReduce pattern)
+      - Streaming window detection
+      - Large-scale deduplication
+      - Rule-based flagging at scale
+    """
+
+    def __init__(self, df: pd.DataFrame):
+        self.df = df.copy()
+        print(f"[BigData] Loaded {len(df):,} records across {df['state'].nunique()} states")
+
+    # ── 1. MapReduce Style Aggregation ────────────────────
+    def mapreduce_fraud_summary(self):
+        """
+        MAP: emit (state, scheme_type) → fraud indicator
+        REDUCE: count frauds per group
+        """
+        print("\n[MapReduce] Aggregating fraud stats per state & scheme...")
+        result = (
+            self.df.groupby(['state', 'scheme_type'])
+            .agg(
+                total_records   = ('is_fraud', 'count'),
+                fraud_count     = ('is_fraud', 'sum'),
+                total_amount    = ('scheme_amount', 'sum'),
+                avg_income      = ('annual_income', 'mean'),
+            )
+            .reset_index()
+        )
+        result['fraud_rate_%'] = (result['fraud_count'] / result['total_records'] * 100).round(2)
+        result['amount_at_risk'] = (result['fraud_rate_%'] / 100 * result['total_amount']).round(0)
+        result.sort_values('fraud_rate_%', ascending=False, inplace=True)
+        print(result.to_string(index=False))
+        result.to_csv('data/mapreduce_summary.csv', index=False)
+        print("[✓] Saved → data/mapreduce_summary.csv")
+        return result
+
+    # ── 2. Streaming Duplicate Detection ──────────────────
+    def detect_duplicate_ids(self):
+        """
+        Simulates streaming deduplication of Aadhaar IDs.
+        In Spark Structured Streaming:
+          df.groupBy(window("timestamp","1 hour"), "aadhaar_id").count()
+        """
+        print("\n[Streaming] Detecting duplicate beneficiary registrations...")
+
+        # Simulate Aadhaar IDs
+        np.random.seed(99)
+        self.df['aadhaar_id'] = np.where(
+            self.df['duplicate_aadhaar'] == 1,
+            np.random.randint(100000, 200000, len(self.df)),   # reused IDs
+            np.arange(200001, 200001 + len(self.df))           # unique IDs
+        )
+
+        aadhaar_counts = Counter(self.df['aadhaar_id'])
+        duplicates = {k: v for k, v in aadhaar_counts.items() if v > 1}
+        dup_ids = list(duplicates.keys())
+
+        flagged = self.df[self.df['aadhaar_id'].isin(dup_ids)].copy()
+        flagged['dup_count'] = flagged['aadhaar_id'].map(aadhaar_counts)
+
+        print(f"  Unique Aadhaar IDs   : {len(aadhaar_counts):,}")
+        print(f"  Duplicate IDs found  : {len(duplicates):,}")
+        print(f"  Records flagged      : {len(flagged):,}")
+        flagged.to_csv('data/duplicate_ids_flagged.csv', index=False)
+        print("[✓] Saved → data/duplicate_ids_flagged.csv")
+        return flagged
+
+    # ── 3. Rule-Based Flagging Engine ─────────────────────
+    def rule_based_flagging(self):
+        """
+        High-speed rule engine – scales to billions of rows
+        using vectorized pandas (analogous to Spark SQL filters).
+        """
+        print("\n[RuleEngine] Applying fraud detection rules at scale...")
+        df = self.df.copy()
+        df['flag_high_income']    = (df['annual_income'] > 500000).astype(int)
+        df['flag_excess_claims']  = (df['claims_per_year'] > 6).astype(int)
+        df['flag_invalid_age']    = ((df['age'] < 5) | (df['age'] > 100)).astype(int)
+        df['flag_high_amount']    = (df['scheme_amount'] > 30000).astype(int)
+        df['flag_no_txn']         = (df['bank_txn_count'] <= 1).astype(int)
+        df['flag_ghost']          = df['ghost_beneficiary']
+        df['flag_dup_aadhaar']    = df['duplicate_aadhaar']
+
+        rule_cols = [c for c in df.columns if c.startswith('flag_')]
+        df['total_flags'] = df[rule_cols].sum(axis=1)
+        df['risk_level']  = pd.cut(df['total_flags'],
+                                   bins=[-1, 0, 1, 3, 10],
+                                   labels=['Clean', 'Low Risk', 'Medium Risk', 'HIGH RISK'])
+
+        summary = df['risk_level'].value_counts()
+        print("\n  Risk Level Distribution:")
+        for level, count in summary.items():
+            print(f"    {level:<15}: {count:>6,} records")
+
+        high_risk = df[df['risk_level'] == 'HIGH RISK']
+        high_risk.to_csv('data/high_risk_flagged.csv', index=False)
+        print(f"\n[✓] {len(high_risk):,} high-risk records saved → data/high_risk_flagged.csv")
+        return df
+
+    # ── 4. State-wise Partition Analysis ──────────────────
+    def partition_analysis(self):
+        """
+        Simulates Spark partitioned processing:
+        df.repartition("state").groupBy("state").agg(...)
+        """
+        print("\n[Partition] State-wise partition analysis...")
+        partitions = {}
+        for state, group in self.df.groupby('state'):
+            fraud_pct = group['is_fraud'].mean() * 100
+            total_amt = group[group['is_fraud']==1]['scheme_amount'].sum()
+            partitions[state] = {
+                'records':       len(group),
+                'fraud_pct':     round(fraud_pct, 2),
+                'fraud_amount':  round(total_amt, 0),
+            }
+        part_df = pd.DataFrame(partitions).T.reset_index()
+        part_df.columns = ['State','Records','Fraud_%','Amount_Lost']
+        part_df.sort_values('Fraud_%', ascending=False, inplace=True)
+        print(part_df.to_string(index=False))
+        part_df.to_csv('data/state_partition_analysis.csv', index=False)
+        print("[✓] Saved → data/state_partition_analysis.csv")
+        return part_df
+
+    def run_full_pipeline(self):
+        print("\n" + "="*60)
+        print("  BIG DATA PIPELINE – FULL RUN")
+        print("="*60)
+        self.mapreduce_fraud_summary()
+        self.detect_duplicate_ids()
+        flagged_df = self.rule_based_flagging()
+        self.partition_analysis()
+        print("\n[✓] Big Data pipeline complete!")
+        return flagged_df
+
+
+# ─────────────────────────────────────────────
+# SPARK PSEUDOCODE REFERENCE (for report)
+# ─────────────────────────────────────────────
+SPARK_PSEUDOCODE = """
+# ── PySpark equivalent of this pipeline ──────────────────
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, count, sum, avg, window
+
+spark = SparkSession.builder \\
+    .appName("GovFraudDetection") \\
+    .config("spark.executor.memory", "4g") \\
+    .getOrCreate()
+
+# Load from HDFS / S3
+df = spark.read.parquet("hdfs://data/gov_scheme_data/")
+
+# MapReduce aggregation
+summary = df.groupBy("state", "scheme_type") \\
+    .agg(
+        count("*").alias("total"),
+        sum("is_fraud").alias("fraud_count"),
+        avg("annual_income").alias("avg_income")
+    )
+
+# Streaming deduplication
+stream = spark.readStream.format("kafka") \\
+    .option("subscribe", "beneficiary_events").load()
+stream.groupBy(
+    window("timestamp", "1 hour"), col("aadhaar_id")
+).count().filter(col("count") > 1)
+
+# Rule-based flagging (Spark SQL)
+df.createOrReplaceTempView("beneficiaries")
+spark.sql(\"\"\"
+  SELECT *, 
+    CASE WHEN annual_income > 500000 THEN 1 ELSE 0 END AS flag_income,
+    CASE WHEN claims_per_year > 6    THEN 1 ELSE 0 END AS flag_claims
+  FROM beneficiaries
+\"\"\")
+"""
+
+if __name__ == '__main__':
+    # Import from main script
+    import sys
+    sys.path.insert(0, '.')
+    from fraud_detection_main import generate_dataset, feature_engineering
+
+    df = generate_dataset(n_samples=10000)
+    df, _ = feature_engineering(df)
+
+    pipeline = BigDataPipeline(df)
+    pipeline.run_full_pipeline()
+    print("\nSpark Pseudocode Reference:")
+    print(SPARK_PSEUDOCODE)
